@@ -156,6 +156,20 @@ The text uses a monospaced font, so you can copy and paste it straight into a bu
 
 ## Getting Started
 
+### Download and install (no .NET installation required)
+
+Open the [GitHub Releases page](https://github.com/CyberBitz/ComScanner/releases) and choose a version:
+
+| Download | Use |
+|---|---|
+| `ComScanner-<version>-win-x64-Setup.exe` | Recommended installer. Installs for the current user under `%LOCALAPPDATA%\Programs\ComScanner`, adds a Start menu shortcut, and offers an optional desktop shortcut. No administrator rights required. Uninstall through Windows **Settings > Apps**. |
+| `ComScanner-<version>-win-x64-Portable.zip` | Extract the entire ZIP into a folder, then run `ComScanner.exe`. No installation required. |
+| `ComScanner-<version>-SHA256SUMS.txt` | SHA-256 hashes for verifying the installer and ZIP. Compare with `Get-FileHash .\<downloaded-file> -Algorithm SHA256`. |
+
+Both packages include the .NET runtime, README, screenshot and license. These releases target **Windows x64**. The installer is not code-signed; Windows SmartScreen may show an unfamiliar-app warning. Verify the download source and checksum before proceeding. A checksum detects corruption but is not a substitute for a trusted source or digital signature.
+
+To upgrade, close ComScanner and run the newer installer. It uses the same installation location and uninstall entry. Export your timeline before closing; sessions are not saved automatically. Portable users should extract each new version into a fresh folder. There is no automatic updater.
+
 ### Visual Studio
 
 1. Open `ComScanner.slnx`.
@@ -184,6 +198,35 @@ The executable is written to `bin\Release\net10.0-windows\win-x64\publish\ComSca
 3. Unplug it. A red **Disconnected** event appears, showing how long it was connected.
 4. Click any row to see full details and that port's history.
 5. Click **Export CSV...** to save the session.
+
+### Publishing a GitHub release (maintainers)
+
+The Windows workflow in `.github/workflows/release.yml` runs when a tag beginning with `v` is pushed. Use `vMAJOR.MINOR.PATCH` for stable releases, or a prerelease such as `v1.2.0-rc.1`. Other version formats fail validation. Numeric version components must be at most 65534 for Windows executable metadata.
+
+After committing and pushing the workflow and the source you want to release:
+
+```powershell
+git tag -a v1.0.0 -m "ComScanner 1.0.0"
+git push origin v1.0.0
+```
+
+The workflow runs on `windows-2022` and:
+
+1. Checks out the exact tagged source and sets up the .NET 10 SDK.
+2. Downloads the pinned Inno Setup 6.7.4 installer from its official release, verifies its publisher signature, and installs the compiler in the runner's temporary directory.
+3. Runs `build\Package-Release.ps1` to publish a Release-mode, self-contained Windows x64 app with version metadata from the tag, create the portable ZIP and installer, and calculate SHA-256 hashes.
+4. Keeps the three downloads as workflow artifacts for 14 days.
+5. Creates a GitHub Release with generated release notes and attaches all three downloads. Tags containing a prerelease suffix create a **prerelease**, not a stable release. A rerun updates assets on the existing release instead of attempting to create a duplicate.
+
+No personal access token or additional repository secret is required: the release job uses the built-in `GITHUB_TOKEN` with `contents: write`. GitHub Actions must be enabled and repository/organization policy must allow this permission. View progress and errors in the repository's **Actions** tab. Release assets remain available independently of workflow-artifact retention. This workflow does not create or push tags for you.
+
+To build the same packages locally, install the .NET SDK and [Inno Setup 6](https://jrsoftware.org/isinfo.php), then run:
+
+```powershell
+.\build\Package-Release.ps1 -Tag v1.0.0
+```
+
+Packages are written to `artifacts\release\downloads`. The output directory must be empty to prevent stale files from entering a release. For another local build, choose a fresh output directory with `-OutputDirectory`, and use `-InnoCompiler` if your `ISCC.exe` is installed outside the default location. The generated `artifacts` folder is ignored by Git.
 
 ---
 
@@ -282,6 +325,11 @@ ComScanner/
 ├── ComPortEnumerator.cs       WMI + registry COM port enumeration and PnP ID parsing
 ├── Images/
 │   └── ComScanner.png         Product screenshot used in this README
+├── .github/workflows/
+│   └── release.yml            Tag-triggered Windows release workflow
+├── build/
+│   ├── Package-Release.ps1    Self-contained publish, ZIP, installer and checksums
+│   └── ComScanner.iss         Per-user Inno Setup installer definition
 └── README.md
 ```
 

@@ -1,0 +1,80 @@
+name: Windows release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish Windows x64
+    runs-on: windows-2022
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install Inno Setup 6.7.4
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.4.exe'
+          $compilerDir = Join-Path $env:RUNNER_TEMP 'InnoSetup'
+          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_4/innosetup-6.7.4.exe' -OutFile $installer
+          $signature = Get-AuthenticodeSignature $installer
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike '*Pyrsys B.V.*') {
+            throw 'Inno Setup installer signature verification failed.'
+          }
+          $install = Start-Process $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/NOICONS', "/DIR=`"$compilerDir`"") -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Inno Setup installation failed: $($install.ExitCode)." }
+          if (-not (Test-Path (Join-Path $compilerDir 'ISCC.exe'))) { throw 'Inno Setup compiler was not found.' }
+
+      - name: Publish app and build packages
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: .\build\Package-Release.ps1 -Tag $env:RELEASE_TAG -InnoCompiler (Join-Path $env:RUNNER_TEMP 'InnoSetup\ISCC.exe')
+
+      - name: Preserve packages as workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ComScanner-${{ github.ref_name }}-win-x64
+          path: artifacts/release/downloads/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create GitHub Release and upload downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $assets = @(Get-ChildItem .\artifacts\release\downloads -File | ForEach-Object FullName)
+          if ($assets.Count -ne 3) { throw "Expected an installer, portable ZIP, and checksum file." }
+          $prerelease = $env:RELEASE_TAG.Contains('-')
+          gh release view $env:RELEASE_TAG --json tagName 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:RELEASE_TAG @assets --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Uploading release assets failed." }
+          } else {
+            $releaseArgs = @('release', 'create', $env:RELEASE_TAG, '--verify-tag', '--title', "ComScanner $env:RELEASE_TAG", '--generate-notes')
+            if ($prerelease) { $releaseArgs += '--prerelease' }
+            gh @releaseArgs @assets
+            if ($LASTEXITCODE -ne 0) { throw "Creating the GitHub Release failed." }
+          }
